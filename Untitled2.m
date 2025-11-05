@@ -1,0 +1,9 @@
+Fr = 240e6;     
+% Fr = 240e6;% 把它换成你采数时的采样率
+% opts.format     = 'int16_iq'; 
+% opts.format     = 'float32_iq';% ✅ 正确类型
+% opts.scale      = 1/32768;        % int16 归一化
+opts.Detrend    = true;   
+opts.Verbose    = true;    % 显示各候选过程
+opts.NgTopK     = 10;      % 显示前 K 个 Ng 候选
+R  = starlink_blind_id('middletest.dat', Fr, opts);
