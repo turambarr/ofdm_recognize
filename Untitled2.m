@@ -16,7 +16,7 @@ opts.CPRatioMin     = 0.15;   % CP 副峰至少要达到主峰的 15%
 opts.CPTolerancePct = 0.15;   % CP 位置容差 ±15%
 opts.CPPenaltyDB    = 15;     % 没有 CP 副峰时惩罚 15 dB
 
-R  = starlink_blind_id('findN.dat', Fr, opts);
+R  = starlink_blind_id('test3.dat', Fr, opts);
 
 % 查看所有候选结果
 fprintf('\n========== 详细结果分析 ==========\n');

@@ -48,6 +48,11 @@ function R = starlink_blind_id(inputFile, Fr, opts)
     % 论文参数（Ng）
     if ~isfield(opts,'Np'),      opts.Np      = 4; end
     if ~isfield(opts,'Td_ns'),   opts.Td_ns   = 108; end
+    % Ng 偏好设置（可选：优先 2 的幂次，如 32）
+    if ~isfield(opts,'NgPreferPow2'), opts.NgPreferPow2 = true; end
+    if ~isfield(opts,'NgPow2List'),   opts.NgPow2List   = [16 32 64 128 256 512]; end
+    if ~isfield(opts,'NgSoftKeepRatio'), opts.NgSoftKeepRatio = 0.98; end
+    if ~isfield(opts,'NgMaxSnapDist'),   opts.NgMaxSnapDist   = []; end  % 为空不启用硬贴近
 
     % ---------- 1) 读取 IQ ----------
     try
@@ -55,11 +60,24 @@ function R = starlink_blind_id(inputFile, Fr, opts)
         if ~isempty(opts.MaxSamples)
             y = y(1:min(end, floor(opts.MaxSamples)));
         end
+
         if opts.Detrend
             y = y - mean(y);
         end
         % RMS 归一化
         r = sqrt(mean(abs(y).^2)); if r>0, y = y / r; end
+
+        % ===== 频谱预白化 =====
+        Yf = fft(y);
+        Px = abs(Yf).^2;
+        % 101点移动平均平滑功率谱
+        Px_smooth = movmean(Px, 101);
+        W = 1 ./ sqrt(Px_smooth + 1e-12);
+        % 限定白化滤波器动态范围，避免极端放大
+        W = min(max(W, 0.3), 3);
+        Yw = Yf .* W;
+        y_white = ifft(Yw);
+        y = y_white;
 
         fprintf('[IO] 读到 %d 样点；format=%s\n', numel(y), meta.detected_format);
     catch ME
@@ -101,7 +119,7 @@ function R = starlink_blind_id(inputFile, Fr, opts)
             res = all_results{fs_idx};
             cp_info = '';
             if isfield(res.diagN, 'cp_ratio_best')
-                cp_info = sprintf(', CP=%.1f%%', res.diagN.cp_ratio_best*100);
+                cp_info = sprintf(', CP=%.1f%% (contrast=%.1f%%)', res.diagN.cp_ratio_best*100, 100*getfield(res.diagN, 'cp_contrast_best'));
             end
             fprintf('[候选#%d] Fs_guess=%.3f MHz → N=%d, Nr=%d, Fs_hat=%.6f MHz, dyn=%.1f dB%s\n', ...
                 fs_idx, res.Fs_guess/1e6, res.N_hat, res.Nr_hat, res.Fs_hat/1e6, ...
@@ -157,7 +175,12 @@ function R = starlink_blind_id(inputFile, Fr, opts)
 
     % ---------- 4) 估 Ng ----------
     try
-        [Ng_hat, diagG] = paper_estimate_Ng(y_rs, N_hat, Fs_hat, opts.Np, opts.Td_ns, opts.Verbose, opts.NgTopK);
+    % 传递 Ng 偏好选项
+    ng_opts = struct('PreferPow2', opts.NgPreferPow2, ...
+             'Pow2List',   opts.NgPow2List, ...
+             'SoftKeepRatio', opts.NgSoftKeepRatio, ...
+             'MaxSnapDist',   opts.NgMaxSnapDist);
+    [Ng_hat, diagG] = paper_estimate_Ng(y_rs, N_hat, Fs_hat, opts.Np, opts.Td_ns, opts.Verbose, opts.NgTopK, ng_opts);
         Tsamp_sym = N_hat + Ng_hat;
         Tsym_hat  = Tsamp_sym / Fs_hat;
         F_sub     = Fs_hat / N_hat;
