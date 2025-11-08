@@ -1,4 +1,4 @@
-Fr = 240e6;     
+Fr = 409.6e6;     
 % Fr = 240e6;% 把它换成你采数时的采样率
 % opts.format     = 'int16_iq'; 
 % opts.format     = 'float32_iq';% ✅ 正确类型
