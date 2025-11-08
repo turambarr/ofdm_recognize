@@ -48,11 +48,6 @@ function R = starlink_blind_id(inputFile, Fr, opts)
     % 论文参数（Ng）
     if ~isfield(opts,'Np'),      opts.Np      = 4; end
     if ~isfield(opts,'Td_ns'),   opts.Td_ns   = 108; end
-    % Ng 偏好设置（可选：优先 2 的幂次，如 32）
-    if ~isfield(opts,'NgPreferPow2'), opts.NgPreferPow2 = true; end
-    if ~isfield(opts,'NgPow2List'),   opts.NgPow2List   = [16 32 64 128 256 512]; end
-    if ~isfield(opts,'NgSoftKeepRatio'), opts.NgSoftKeepRatio = 0.98; end
-    if ~isfield(opts,'NgMaxSnapDist'),   opts.NgMaxSnapDist   = []; end  % 为空不启用硬贴近
 
     % ---------- 1) 读取 IQ ----------
     try
@@ -175,12 +170,7 @@ function R = starlink_blind_id(inputFile, Fr, opts)
 
     % ---------- 4) 估 Ng ----------
     try
-    % 传递 Ng 偏好选项
-    ng_opts = struct('PreferPow2', opts.NgPreferPow2, ...
-             'Pow2List',   opts.NgPow2List, ...
-             'SoftKeepRatio', opts.NgSoftKeepRatio, ...
-             'MaxSnapDist',   opts.NgMaxSnapDist);
-    [Ng_hat, diagG] = paper_estimate_Ng(y_rs, N_hat, Fs_hat, opts.Np, opts.Td_ns, opts.Verbose, opts.NgTopK, ng_opts);
+        [Ng_hat, diagG] = paper_estimate_Ng(y_rs, N_hat, Fs_hat, opts.Np, opts.Td_ns, opts.Verbose, opts.NgTopK);
         Tsamp_sym = N_hat + Ng_hat;
         Tsym_hat  = Tsamp_sym / Fs_hat;
         F_sub     = Fs_hat / N_hat;

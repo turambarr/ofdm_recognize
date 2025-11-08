@@ -112,8 +112,7 @@ for k=1:numel(S_N)
                 cp_peak = 0; cp_med = 0;
             end
             cp_ratio(k) = min( cp_peak / max(mx, eps), 1.0 ); % 绝对比
-            % 对比度：限制在 [0,1]，避免主峰过小导致的夸大
-            cp_contrast_vec(k) = min( max(cp_peak - cp_med, 0) / max(mx, eps), 1.0 );
+            cp_contrast_vec(k) = max(cp_peak - cp_med, 0) / max(mx, eps); % 对比度
             cp_pass_flag(k) = (cp_contrast_vec(k) >= opts.CPRatioMin) && ng_range_ok(k);
             % 得分策略：通过则 dyn + 提升；不通过则 dyn - 惩罚
             if cp_pass_flag(k)
@@ -138,9 +137,9 @@ for k=1:numel(S_N)
         cp_flag = '';
         if opts.EnableCPCheck
             if cp_pass_flag(k)
-                cp_flag = sprintf(' [CP✓ ratio=%.1f%% contrast=%.1f%% Ng=%d (%.2f%%)]', cp_ratio(k)*100, cp_contrast_vec(k)*100, Ng_cand_vec(k), 100*Ng_cand_vec(k)/max(N_cand,1));
+                cp_flag = sprintf(' [CP✓ ratio=%.1f%% Ng=%d (%.2f%%)]', cp_ratio(k)*100, Ng_cand_vec(k), 100*Ng_cand_vec(k)/max(N_cand,1));
             else
-                cp_flag = sprintf(' [CP✗ ratio=%.1f%% contrast=%.1f%% Ng=%d (%.2f%%)%s]', cp_ratio(k)*100, cp_contrast_vec(k)*100, Ng_cand_vec(k), 100*max(Ng_cand_vec(k),0)/max(N_cand,1), ternary_str(ng_range_ok(k),'',' RANGE!')); 
+                cp_flag = sprintf(' [CP✗ ratio=%.1f%% Ng=%d (%.2f%%)%s]', cp_ratio(k)*100, Ng_cand_vec(k), 100*max(Ng_cand_vec(k),0)/max(N_cand,1), ternary_str(ng_range_ok(k),'',' RANGE!')); 
             end
         end
         fprintf('[N/Fs] N=%d: tau=[%d,%d], peak=%.4g@%d, dyn=%.1f dB score=%.1f%s%s\n', ...
