@@ -35,12 +35,6 @@ function R = starlink_blind_id(inputFile, Fr, opts)
     if ~isfield(opts,'nu_dB'),   opts.nu_dB   = 10; end            % 验证门限
     if ~isfield(opts,'M_N'),     opts.M_N     = []; end            % R0 使用样本数
     
-    % CP 成对峰验证参数（新增）
-    if ~isfield(opts,'EnableCPCheck'),  opts.EnableCPCheck = true; end   % 启用 CP 检查
-    if ~isfield(opts,'CPRatioMin'),     opts.CPRatioMin = 0.15; end      % CP 副峰最小比例
-    if ~isfield(opts,'CPTolerancePct'), opts.CPTolerancePct = 0.15; end  % CP 位置容差
-    if ~isfield(opts,'CPPenaltyDB'),    opts.CPPenaltyDB = 15; end       % 无 CP 峰惩罚 dB
-    
     % 确保 Fs_guess 是行向量
     opts.Fs_guess = opts.Fs_guess(:).';
     num_Fs_candidates = numel(opts.Fs_guess);
@@ -76,14 +70,8 @@ function R = starlink_blind_id(inputFile, Fr, opts)
             Fs_guess_current = opts.Fs_guess(fs_idx);
             fprintf('\n---------- Fs_guess 候选 #%d: %.3f MHz ----------\n', fs_idx, Fs_guess_current/1e6);
             
-            % 构建 CP 检查参数
-            cp_opts = struct('EnableCPCheck', opts.EnableCPCheck, ...
-                             'CPRatioMin', opts.CPRatioMin, ...
-                             'CPTolerancePct', opts.CPTolerancePct, ...
-                             'CPPenaltyDB', opts.CPPenaltyDB);
-            
             [N_hat, Nr_hat, Fs_hat, diagN] = paper_estimate_N_and_Fs( ...
-                y, Fr, opts.S_N, Fs_guess_current, opts.p, opts.nu_dB, opts.M_N, opts.Verbose, cp_opts);
+                y, Fr, opts.S_N, Fs_guess_current, opts.p, opts.nu_dB, opts.M_N, opts.Verbose);
             
             fprintf('[OUT #%d] N=%d, Nr=%d, Fs_hat=%.6f MHz (基于 Fs_guess=%.3f MHz)\n', ...
                 fs_idx, N_hat, Nr_hat, Fs_hat/1e6, Fs_guess_current/1e6);
@@ -99,36 +87,19 @@ function R = starlink_blind_id(inputFile, Fr, opts)
         fprintf('\n========== 所有 Fs_guess 候选结果汇总 ==========\n');
         for fs_idx = 1:num_Fs_candidates
             res = all_results{fs_idx};
-            cp_info = '';
-            if isfield(res.diagN, 'cp_ratio_best')
-                cp_info = sprintf(', CP=%.1f%%', res.diagN.cp_ratio_best*100);
-            end
-            fprintf('[候选#%d] Fs_guess=%.3f MHz → N=%d, Nr=%d, Fs_hat=%.6f MHz, dyn=%.1f dB%s\n', ...
-                fs_idx, res.Fs_guess/1e6, res.N_hat, res.Nr_hat, res.Fs_hat/1e6, ...
-                res.diagN.dyn_dB_best, cp_info);
+            fprintf('[候选#%d] Fs_guess=%.3f MHz → N=%d, Nr=%d, Fs_hat=%.6f MHz, dyn=%.1f dB\n', ...
+                fs_idx, res.Fs_guess/1e6, res.N_hat, res.Nr_hat, res.Fs_hat/1e6, res.diagN.dyn_dB_best);
         end
         
-        % 选择最佳结果（如果启用 CP，基于 cp_score；否则基于 dyn_dB）
-        score_values = zeros(num_Fs_candidates, 1);
+        % 选择最佳结果（基于动态范围 dyn_dB）
+        dyn_values = zeros(num_Fs_candidates, 1);
         for fs_idx = 1:num_Fs_candidates
-            diagN_fs = all_results{fs_idx}.diagN;
-            if opts.EnableCPCheck && isfield(diagN_fs, 'cp_score')
-                % 使用 CP 调整后的得分（选最高的那个 N 候选的 cp_score）
-                [~, best_N_idx] = max(diagN_fs.cp_score);
-                score_values(fs_idx) = diagN_fs.cp_score(best_N_idx);
-            else
-                score_values(fs_idx) = diagN_fs.dyn_dB_best;
-            end
+            dyn_values(fs_idx) = all_results{fs_idx}.diagN.dyn_dB_best;
         end
-        [best_score, best_idx] = max(score_values);
+        [best_dyn, best_idx] = max(dyn_values);
         
-        if opts.EnableCPCheck
-            fprintf('\n[最佳] 选择候选 #%d (Fs_guess=%.3f MHz, CP验证得分=%.1f dB 最高)\n', ...
-                best_idx, opts.Fs_guess(best_idx)/1e6, best_score);
-        else
-            fprintf('\n[最佳] 选择候选 #%d (Fs_guess=%.3f MHz, dyn=%.1f dB 最高)\n', ...
-                best_idx, opts.Fs_guess(best_idx)/1e6, best_score);
-        end
+        fprintf('\n[最佳] 选择候选 #%d (Fs_guess=%.3f MHz, dyn=%.1f dB 最高)\n', ...
+            best_idx, opts.Fs_guess(best_idx)/1e6, best_dyn);
         
         % 使用最佳结果继续后续处理
         N_hat  = all_results{best_idx}.N_hat;
