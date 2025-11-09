@@ -27,6 +27,12 @@ function R = starlink_blind_id(inputFile, Fr, opts)
     if ~isfield(opts,'Detrend'),   opts.Detrend = true; end    % 去均值
     if ~isfield(opts,'Verbose'),   opts.Verbose = false; end   % 显示候选过程
     if ~isfield(opts,'NgTopK'),    opts.NgTopK = 10; end       % 显示前 K 个 Ng 候选
+    % 周期性成分剥除（独立预处理）
+    if ~isfield(opts,'EnableStripPeriodic'), opts.EnableStripPeriodic = false; end
+    if ~isfield(opts,'StripPeriodicOpts'),   opts.StripPeriodicOpts   = struct(); end
+    % 调试输出
+    if ~isfield(opts,'DebugLevel'),  opts.DebugLevel = 0; end   % 0:无 1:关键 2:详细
+    if ~isfield(opts,'DebugTopK'),   opts.DebugTopK  = 8; end
 
     % 论文参数（N/Fs）                
     if ~isfield(opts,'S_N'),     opts.S_N     = 2.^(8:13); end     % N 候选
@@ -73,6 +79,57 @@ function R = starlink_blind_id(inputFile, Fr, opts)
         Yw = Yf .* W;
         y_white = ifft(Yw);
         y = y_white;
+
+        % —— Debug：剥除前的周期峰列表（快速RHO）——
+        if opts.DebugLevel>=1
+            try
+                Kseg_dbg = 3; Mfrac_dbg = 0.5; tmin_dbg = 16; tmax_dbg = min(20000, floor(numel(y)/4));
+                [rho0, taus0] = local_rho_curve_multiseg(y, tmin_dbg, tmax_dbg, Mfrac_dbg, Kseg_dbg);
+                [pks, locs] = findpeaks(rho0);
+                [pks_sorted, ord] = sort(pks, 'descend');
+                Ltop = min(opts.DebugTopK, numel(ord));
+                fprintf('[DBG] RHO-PEAKS(before strip): ');
+                for k=1:Ltop
+                    fprintf('#%d tau=%d rho=%.3f  ', k, taus0(locs(ord(k))), pks_sorted(k));
+                end
+                fprintf('\n');
+            catch
+            end
+        end
+
+        % —— 可选：剥除未知导频/同步等稳定重复成分 ——
+        strip_info = struct();
+        if isfield(opts,'EnableStripPeriodic') && opts.EnableStripPeriodic
+            sp = opts.StripPeriodicOpts;
+            if ~isfield(sp,'thr_rho'),   sp.thr_rho = 0.22; end     % 显著周期阈值（保守→0.25；激进→0.18）
+            if ~isfield(sp,'Kseg'),      sp.Kseg    = 5;    end     % 多段一致性，增强稳健性
+            if ~isfield(sp,'maxPeaks'),  sp.maxPeaks= 2;    end     % 剥除最多2类强重复
+            if ~isfield(sp,'Mfrac'),     sp.Mfrac   = 0.5;  end     % 相关窗口相对长度
+            if ~isfield(sp,'recomputeEach'), sp.recomputeEach = true; end
+            if ~isfield(sp,'verbose'),   sp.verbose = logical(opts.Verbose); end
+            [y_stripped, strip_info] = strip_periodic_components(y, sp);
+            if ~isempty(strip_info)
+                fprintf('[STRIP] 剥除周期数=%d，总能量去除≈%.2f%%，taus=%s\n', ...
+                    numel(strip_info.taus_detected), 100*sum(strip_info.removed_energy_pct), mat2str(strip_info.taus_detected.'));
+            end
+            y = y_stripped;
+            % —— Debug：剥除后的周期峰列表 ——
+            if opts.DebugLevel>=1
+                try
+                    Kseg_dbg = 3; Mfrac_dbg = 0.5; tmin_dbg = 16; tmax_dbg = min(20000, floor(numel(y)/4));
+                    [rho1, taus1] = local_rho_curve_multiseg(y, tmin_dbg, tmax_dbg, Mfrac_dbg, Kseg_dbg);
+                    [pks, locs] = findpeaks(rho1);
+                    [pks_sorted, ord] = sort(pks, 'descend');
+                    Ltop = min(opts.DebugTopK, numel(ord));
+                    fprintf('[DBG] RHO-PEAKS(after strip):  ');
+                    for k=1:Ltop
+                        fprintf('#%d tau=%d rho=%.3f  ', k, taus1(locs(ord(k))), pks_sorted(k));
+                    end
+                    fprintf('\n');
+                catch
+                end
+            end
+        end
 
         fprintf('[IO] 读到 %d 样点；format=%s\n', numel(y), meta.detected_format);
     catch ME
@@ -190,6 +247,11 @@ function R = starlink_blind_id(inputFile, Fr, opts)
     R.Tsym = (N_hat + Ng_hat)/Fs_hat;
     R.F = Fs_hat / N_hat;      % 子载波间隔
     R.diagN = diagN; R.diagG = diagG;
+    if exist('strip_info','var') && ~isempty(strip_info)
+        R.strip_info = strip_info;
+    else
+        R.strip_info = [];
+    end
     R.all_Fs_candidates = all_results;  % 保存所有 Fs_guess 候选的结果
     R.best_candidate_idx = best_idx;    % 最佳候选索引
 end
@@ -198,4 +260,37 @@ end
 function R = fail_out(prefix, msg)
     fprintf(2,'[ERR] %s：%s\n', prefix, msg);
     R = struct('status','fail','errorMsg',[prefix '：' msg]);
+end
+
+function [rho, taus] = local_rho_curve_multiseg(y, tmin, tmax, Mfrac, K)
+% 供调试打印使用：固定窗口+归一化相关 + 多段平均
+    y = y(:); L = numel(y);
+    tmin = max(1, round(tmin)); tmax = min(L-2, round(tmax));
+    taus = tmin:tmax;
+    if isempty(taus), rho = zeros(0,1); return; end
+    K = max(1, round(K));
+    seg_len = floor(L / K);
+    acc = 0; cnt=0;
+    for k=1:K
+        s1 = (k-1)*seg_len + 1; if k<K, s2 = k*seg_len; else, s2 = L; end
+        if s2 - s1 + 1 <= max(taus)+2, continue; end
+        acc = acc + local_rho_curve_single(y(s1:s2), taus, Mfrac);
+        cnt = cnt + 1;
+    end
+    if cnt>0, rho = acc/cnt; else, rho = local_rho_curve_single(y, taus, Mfrac); end
+end
+
+function rho = local_rho_curve_single(y, taus, Mfrac)
+    L = numel(y); taus = taus(:).';
+    m0 = max(8, min([floor(Mfrac*(L-1)), L-1 - max(taus), L-1]));
+    if m0<=0, rho = zeros(numel(taus),1); return; end
+    seg1 = y(1:m0); E1 = sum(abs(seg1).^2);
+    rho = zeros(numel(taus),1);
+    for i=1:numel(taus)
+        t = taus(i); if t>=L-1, rho(i)=0; continue; end
+        seg2 = y(1+t:t+m0);
+        num = abs(sum(seg2 .* conj(seg1)));
+        E2  = sum(abs(seg2).^2);
+        rho(i) = num / max(sqrt(E1*E2), eps);
+    end
 end
